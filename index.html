@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>用户增长涨涨涨 - AI去水印</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              cyber: {
+                dark: '#050b14',
+                panel: '#0f172a',
+                primary: '#06b6d4', // Cyan-500
+                secondary: '#f43f5e', // Rose-500
+                text: '#e2e8f0',
+                dim: '#64748b'
+              }
+            },
+            fontFamily: {
+              mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', "Liberation Mono", "Courier New", 'monospace'],
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      body {
+        background-color: #050b14;
+        color: #e2e8f0;
+        overflow: hidden;
+      }
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #0f172a; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #334155; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #475569; 
+      }
+      .cyber-glitch {
+        text-shadow: 2px 0 #f43f5e, -2px 0 #06b6d4;
+      }
+    </style>
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "@google/genai": "https://esm.sh/@google/genai@0.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
+  }
+}
+</script>
+    <!-- Shim for process.env if running directly in browser without build step -->
+    <script>
+        if (typeof process === 'undefined') {
+            window.process = { env: { API_KEY: '' } }; 
+        }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+      import React, { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { GoogleGenAI } from "@google/genai";
+
+      // --- TYPES ---
+      const ToolType = {
+        BRUSH: 'BRUSH',
+        HAND: 'HAND',
+      };
+
+      const AppState = {
+        UPLOAD: 'UPLOAD',
+        EDIT: 'EDIT',
+        PROCESSING: 'PROCESSING',
+        COMPARE: 'COMPARE',
+      };
+
+      // --- ICONS ---
+      const BrushIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 10.66a5 5 0 0 1-5 5L4 6.69a5 5 0 0 1 5-5Z" /><path d="M6 16v6" /><path d="M2 22h4" /><path d="M5.8 17.6a5.2 5.2 0 0 1 10.4 0l.2 4.4H6l-.2-4.4Z" /></svg>
+      );
+      const HandIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0" /><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2" /><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" /></svg>
+      );
+      const UndoIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></svg>
+      );
+      const TrashIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
+      );
+      const UploadIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" x2="12" y1="3" y2="15" /></svg>
+      );
+      const DownloadIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></svg>
+      );
+      const MagicIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" /></svg>
+      );
+      const CheckIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M20 6 9 17l-5-5" /></svg>
+      );
+      const ArrowLeftIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+      );
+      const ArrowRightIcon = ({ className }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m12 5 7 7-7 7"/><path d="M5 12h14"/></svg>
+      );
+
+      // --- SERVICE ---
+      const API_KEY = process.env.API_KEY || '';
+      const ai = new GoogleGenAI({ apiKey: API_KEY });
+
+      const removeWatermark = async (originalImageBase64, maskImageBase64) => {
+        try {
+          // Robust MIME type detection
+          const mimeMatch = originalImageBase64.match(/^data:(image\/[\w+.-]+);base64,/);
+          const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+
+          const cleanOriginal = originalImageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '');
+          const cleanMask = maskImageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '');
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+              parts: [
+                {
+                  text: "You are an expert image editor. I have provided an original image and a mask image. The mask is black and white, where white pixels indicate the area to remove. Task: Remove the object/watermark defined by the white area in the mask from the original image. Inpaint the removed area seamlessly to match the surrounding background texture and lighting. Output ONLY the resulting image.",
+                },
+                {
+                  inlineData: {
+                    mimeType: mimeType,
+                    data: cleanOriginal,
+                  },
+                },
+                {
+                  inlineData: {
+                    mimeType: 'image/png',
+                    data: cleanMask,
+                  },
+                },
+              ],
+            },
+          });
+
+          let resultImageBase64 = '';
+          if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+             for (const part of response.candidates[0].content.parts) {
+               if (part.inlineData && part.inlineData.data) {
+                 resultImageBase64 = `data:image/png;base64,${part.inlineData.data}`;
+                 break;
+               }
+             }
+          }
+
+          if (!resultImageBase64) {
+            const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) {
+                console.warn("Model returned text:", text);
+                throw new Error("AI无法处理该图片。可能触发了安全策略。");
+            }
+            throw new Error("生成失败，请重试。");
+          }
+
+          return resultImageBase64;
+        } catch (error) {
+          console.error("Gemini API Error:", error);
+          throw error;
+        }
+      };
+
+      // --- COMPONENT: CanvasEditor ---
+      const CanvasEditor = forwardRef(({
+        imageSrc,
+        tool,
+        brushSize,
+        onMaskChange,
+        strokes,
+        setStrokes
+      }, ref) => {
+        const containerRef = useRef(null);
+        const canvasRef = useRef(null);
+        const [scale, setScale] = useState(1);
+        const [offset, setOffset] = useState({ x: 0, y: 0 });
+        const [isDragging, setIsDragging] = useState(false);
+        const [lastMousePos, setLastMousePos] = useState(null);
+        const [imageObj, setImageObj] = useState(null);
+
+        useEffect(() => {
+          const img = new Image();
+          img.src = imageSrc;
+          img.onload = () => {
+            setImageObj(img);
+            if (containerRef.current) {
+              const containerW = containerRef.current.clientWidth;
+              const containerH = containerRef.current.clientHeight;
+              const scaleW = containerW / img.width;
+              const scaleH = containerH / img.height;
+              const initialScale = Math.min(scaleW, scaleH) * 0.9;
+              
+              setScale(initialScale);
+              setOffset({
+                x: (containerW - img.width * initialScale) / 2,
+                y: (containerH - img.height * initialScale) / 2
+              });
+            }
+          };
+        }, [imageSrc]);
+
+        const draw = useCallback(() => {
+          const canvas = canvasRef.current;
+          if (!canvas || !imageObj) return;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+
+          if (containerRef.current) {
+            canvas.width = containerRef.current.clientWidth;
+            canvas.height = containerRef.current.clientHeight;
+          }
+
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.save();
+          ctx.translate(offset.x, offset.y);
+          ctx.scale(scale, scale);
+          ctx.drawImage(imageObj, 0, 0);
+
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          
+          strokes.forEach(stroke => {
+            if (stroke.points.length === 0) return;
+            ctx.beginPath();
+            ctx.lineWidth = stroke.size;
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)'; 
+            ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+            for (let i = 1; i < stroke.points.length; i++) {
+              ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+            }
+            ctx.stroke();
+          });
+
+          ctx.restore();
+        }, [imageObj, offset, scale, strokes]);
+
+        useEffect(() => {
+          requestAnimationFrame(draw);
+        }, [draw]);
+
+        useEffect(() => {
+          onMaskChange(strokes.length > 0);
+        }, [strokes, onMaskChange]);
+
+        useImperativeHandle(ref, () => ({
+          getMaskDataURL: () => {
+            if (!imageObj) return '';
+            const offCanvas = document.createElement('canvas');
+            offCanvas.width = imageObj.width;
+            offCanvas.height = imageObj.height;
+            const ctx = offCanvas.getContext('2d');
+            if (!ctx) return '';
+
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, offCanvas.width, offCanvas.height);
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = '#FFFFFF';
+
+            strokes.forEach(stroke => {
+              if (stroke.points.length === 0) return;
+              ctx.beginPath();
+              ctx.lineWidth = stroke.size;
+              ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+              for (let i = 1; i < stroke.points.length; i++) {
+                ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+              }
+              ctx.stroke();
+            });
+
+            return offCanvas.toDataURL('image/png');
+          }
+        }));
+
+        const getCanvasPoint = (e) => {
+          if (!canvasRef.current) return { x: 0, y: 0 };
+          const rect = canvasRef.current.getBoundingClientRect();
+          const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+          const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+          return {
+            x: (clientX - rect.left - offset.x) / scale,
+            y: (clientY - rect.top - offset.y) / scale
+          };
+        };
+
+        const handlePointerDown = (e) => {
+          if (e.cancelable) e.preventDefault();
+          setIsDragging(true);
+          const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+          const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+          setLastMousePos({ x: clientX, y: clientY });
+
+          if (tool === ToolType.BRUSH) {
+            const point = getCanvasPoint(e);
+            setStrokes(prev => [...prev, { points: [point], size: brushSize / scale }]);
+          }
+        };
+
+        const handlePointerMove = (e) => {
+          if (e.cancelable) e.preventDefault();
+          if (!isDragging) return;
+
+          const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+          const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+          if (tool === ToolType.HAND && lastMousePos) {
+            const dx = clientX - lastMousePos.x;
+            const dy = clientY - lastMousePos.y;
+            setOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+            setLastMousePos({ x: clientX, y: clientY });
+          } else if (tool === ToolType.BRUSH) {
+            const point = getCanvasPoint(e);
+            setStrokes(prev => {
+              const lastStroke = prev[prev.length - 1];
+              if (!lastStroke) return prev;
+              const newStroke = { ...lastStroke, points: [...lastStroke.points, point] };
+              return [...prev.slice(0, -1), newStroke];
+            });
+            setLastMousePos({ x: clientX, y: clientY });
+          }
+        };
+
+        const handlePointerUp = () => {
+          setIsDragging(false);
+          setLastMousePos(null);
+        };
+
+        const handleWheel = (e) => {
+          const zoomIntensity = 0.1;
+          const direction = e.deltaY < 0 ? 1 : -1;
+          const zoomFactor = 1 + (direction * zoomIntensity);
+          
+          const newScale = Math.max(0.1, Math.min(scale * zoomFactor, 10));
+
+          if (canvasRef.current) {
+            const rect = canvasRef.current.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const newOffsetX = mouseX - (mouseX - offset.x) * (newScale / scale);
+            const newOffsetY = mouseY - (mouseY - offset.y) * (newScale / scale);
+
+            setOffset({ x: newOffsetX, y: newOffsetY });
+            setScale(newScale);
+          }
+        };
+
+        return (
+          <div 
+            ref={containerRef} 
+            className="w-full h-full relative bg-[#020610] overflow-hidden cursor-crosshair touch-none"
+          >
+            <canvas
+              ref={canvasRef}
+              onMouseDown={handlePointerDown}
+              onMouseMove={handlePointerMove}
+              onMouseUp={handlePointerUp}
+              onMouseLeave={handlePointerUp}
+              onTouchStart={handlePointerDown}
+              onTouchMove={handlePointerMove}
+              onTouchEnd={handlePointerUp}
+              onWheel={handleWheel}
+              className="block"
+            />
+          </div>
+        );
+      });
+      CanvasEditor.displayName = 'CanvasEditor';
+
+      // --- COMPONENT: ComparisonView ---
+      const ComparisonView = ({ originalSrc, processedSrc }) => {
+        const [sliderPosition, setSliderPosition] = useState(50);
+        const [isDragging, setIsDragging] = useState(false);
+        const containerRef = useRef(null);
+
+        const handleMouseDown = () => setIsDragging(true);
+        
+        const handleMouseMove = (e) => {
+          if (!isDragging || !containerRef.current) return;
+          const rect = containerRef.current.getBoundingClientRect();
+          const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+          const x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+          const percentage = (x / rect.width) * 100;
+          setSliderPosition(percentage);
+        };
+
+        useEffect(() => {
+          const stopDragging = () => setIsDragging(false);
+          window.addEventListener('mouseup', stopDragging);
+          window.addEventListener('touchend', stopDragging);
+          return () => {
+            window.removeEventListener('mouseup', stopDragging);
+            window.removeEventListener('touchend', stopDragging);
+          };
+        }, []);
+
+        return (
+          <div 
+            ref={containerRef}
+            className="relative w-full h-full select-none overflow-hidden flex items-center justify-center bg-[#020610]"
+            onMouseMove={handleMouseMove}
+            onTouchMove={handleMouseMove}
+          >
+              <div className="relative h-full w-full max-w-[90%] max-h-[90%] flex items-center justify-center">
+                  <img 
+                      src={originalSrc} 
+                      alt="Original" 
+                      className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 max-w-full max-h-full object-contain pointer-events-none"
+                  />
+                  <div 
+                      className="absolute top-0 left-0 w-full h-full pointer-events-none"
+                      style={{ clipPath: `inset(0 0 0 ${sliderPosition}%)` }}
+                  >
+                       <img 
+                          src={processedSrc} 
+                          alt="Processed" 
+                          className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 max-w-full max-h-full object-contain"
+                      />
+                  </div>
+                  <div 
+                      className="absolute top-0 bottom-0 w-1 bg-cyber-primary cursor-ew-resize z-10 hover:bg-white transition-colors"
+                      style={{ left: `${sliderPosition}%` }}
+                      onMouseDown={handleMouseDown}
+                      onTouchStart={handleMouseDown}
+                  >
+                      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-cyber-primary rounded-full flex items-center justify-center shadow-[0_0_15px_rgba(6,182,212,0.8)]">
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M15 18L9 12L15 6" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                      </div>
+                  </div>
+                  <div className="absolute bottom-4 left-4 bg-black/60 px-3 py-1 rounded text-cyber-secondary text-sm border border-cyber-secondary/30">原图</div>
+                  <div className="absolute bottom-4 right-4 bg-black/60 px-3 py-1 rounded text-cyber-primary text-sm border border-cyber-primary/30">效果</div>
+              </div>
+          </div>
+        );
+      };
+
+      // --- MAIN COMPONENT: App ---
+      const App = () => {
+        const [appState, setAppState] = useState(AppState.UPLOAD);
+        const [originalImage, setOriginalImage] = useState(null);
+        const [processedImage, setProcessedImage] = useState(null);
+        const [tool, setTool] = useState(ToolType.BRUSH);
+        const [brushSize, setBrushSize] = useState(20);
+        const [strokes, setStrokes] = useState([]);
+        const [hasMask, setHasMask] = useState(false);
+        const [loadingText, setLoadingText] = useState("");
+        const [errorMsg, setErrorMsg] = useState(null);
+        
+        // Navigation History Stack
+        // History contains only "Edit" and "Compare" snapshots.
+        // Index -1 represents the "Upload" state.
+        const [history, setHistory] = useState([]);
+        const [historyIndex, setHistoryIndex] = useState(-1);
+
+        const canvasRef = useRef(null);
+
+        const restoreSnapshot = (snapshot) => {
+          setAppState(snapshot.appState);
+          setOriginalImage(snapshot.originalImage);
+          setProcessedImage(snapshot.processedImage);
+          setStrokes(snapshot.strokes);
+          setHasMask(snapshot.strokes.length > 0);
+          setErrorMsg(null);
+        };
+
+        const pushNewState = (newState) => {
+          // If we are at Index -1 (Upload), we just treat current history as empty for the sake of base
+          let currentHistory = historyIndex === -1 ? [] : [...history];
+          
+          // Update current slot with latest state before moving (if not at upload)
+          if (historyIndex >= 0 && historyIndex < currentHistory.length) {
+            currentHistory[historyIndex] = {
+              appState,
+              originalImage,
+              processedImage,
+              strokes: [...strokes]
+            };
+          }
+          
+          // Slice forward history (redo path)
+          const upToCurrent = historyIndex === -1 ? [] : currentHistory.slice(0, historyIndex + 1);
+          const newHistory = [...upToCurrent, newState];
+          
+          setHistory(newHistory);
+          setHistoryIndex(newHistory.length - 1);
+          restoreSnapshot(newState);
+        };
+
+        const handleUpload = (e) => {
+          if (e.target.files && e.target.files[0]) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              if (event.target?.result) {
+                const newImage = event.target.result;
+                const initialState = {
+                  appState: AppState.EDIT,
+                  originalImage: newImage,
+                  processedImage: null,
+                  strokes: []
+                };
+                // Reset history completely for new upload
+                setHistory([initialState]);
+                setHistoryIndex(0);
+                restoreSnapshot(initialState);
+              }
+            };
+            reader.readAsDataURL(e.target.files[0]);
+          }
+        };
+
+        const handleStartProcessing = async () => {
+          if (!originalImage || !canvasRef.current) return;
+          
+          // Save current state before transitioning
+          let currentHistory = [...history];
+          if (historyIndex >= 0) {
+             currentHistory[historyIndex] = {
+               appState: AppState.EDIT,
+               originalImage,
+               processedImage: null,
+               strokes: [...strokes]
+             };
+             setHistory(currentHistory); // Persist strokes
+          }
+
+          setAppState(AppState.PROCESSING);
+          setLoadingText("magic郑正在施法前摇......");
+          setErrorMsg(null);
+
+          try {
+            const maskDataUrl = canvasRef.current.getMaskDataURL();
+            const result = await removeWatermark(originalImage, maskDataUrl);
+            
+            const resultState = {
+              appState: AppState.COMPARE,
+              originalImage: originalImage,
+              processedImage: result,
+              strokes: strokes 
+            };
+            pushNewState(resultState);
+
+          } catch (error) {
+            console.error(error);
+            setErrorMsg(error.message || "处理失败，请重试。");
+            setAppState(AppState.EDIT);
+          }
+        };
+
+        const handleApplyEffect = () => {
+          if (processedImage) {
+            const newEditState = {
+              appState: AppState.EDIT,
+              originalImage: processedImage,
+              processedImage: null,
+              strokes: []
+            };
+            pushNewState(newEditState);
+          }
+        };
+
+        const handleStepBack = () => {
+          if (historyIndex > 0) {
+            const newIndex = historyIndex - 1;
+            setHistoryIndex(newIndex);
+            restoreSnapshot(history[newIndex]);
+          } else if (historyIndex === 0) {
+            // Go back to Upload page, but don't lose history
+            setHistoryIndex(-1);
+            setAppState(AppState.UPLOAD);
+            setOriginalImage(null);
+            setProcessedImage(null);
+            setStrokes([]);
+            setHasMask(false);
+          }
+        };
+
+        const handleStepForward = () => {
+          if (historyIndex < history.length - 1) {
+            const newIndex = historyIndex + 1;
+            setHistoryIndex(newIndex);
+            restoreSnapshot(history[newIndex]);
+          }
+        };
+
+        const handleBackToHome = () => {
+          setAppState(AppState.UPLOAD);
+          setOriginalImage(null);
+          setProcessedImage(null);
+          setStrokes([]);
+          setHasMask(false);
+          setHistory([]);
+          setHistoryIndex(-1);
+        };
+
+        const handleUndo = () => setStrokes(prev => prev.slice(0, -1));
+        const handleReset = () => setStrokes([]);
+        const handleDownload = () => {
+          if (processedImage) {
+            const link = document.createElement('a');
+            link.href = processedImage;
+            link.download = `magic-zheng-edited-${Date.now()}.png`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }
+        };
+
+        const canGoBack = historyIndex >= 0; // If index is 0, we can go back to -1 (Upload)
+        const canGoForward = historyIndex < history.length - 1;
+
+        return (
+          <div className="flex flex-col h-screen w-full bg-cyber-dark text-cyber-text font-sans">
+            <header className="h-16 border-b border-gray-800 bg-cyber-panel flex items-center justify-between px-6 shadow-lg z-20">
+              <div className="flex items-center gap-4">
+                 <div className="flex items-center gap-2">
+                   <button 
+                     onClick={handleStepBack}
+                     disabled={!canGoBack || appState === AppState.PROCESSING}
+                     className={`group flex items-center justify-center p-2 rounded-lg border border-gray-700 transition-all ${canGoBack && appState !== AppState.PROCESSING ? 'bg-gray-900/50 hover:bg-cyber-primary/20 hover:border-cyber-primary text-gray-300 hover:text-cyber-primary' : 'opacity-30 cursor-not-allowed text-gray-600 border-gray-800'}`}
+                     title="返回上一步"
+                   >
+                     <ArrowLeftIcon className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
+                   </button>
+
+                   <button 
+                     onClick={handleStepForward}
+                     disabled={!canGoForward || appState === AppState.PROCESSING}
+                     className={`group flex items-center justify-center p-2 rounded-lg border border-gray-700 transition-all ${canGoForward && appState !== AppState.PROCESSING ? 'bg-gray-900/50 hover:bg-cyber-primary/20 hover:border-cyber-primary text-gray-300 hover:text-cyber-primary' : 'opacity-30 cursor-not-allowed text-gray-600 border-gray-800'}`}
+                     title="下一步"
+                   >
+                     <ArrowRightIcon className="w-5 h-5 group-hover:translate-x-0.5 transition-transform" />
+                   </button>
+                 </div>
+
+                 <div className="h-6 w-px bg-gray-700"></div>
+
+                 <div className="flex items-center gap-2 cursor-pointer group" onClick={handleBackToHome}>
+                    <div className="w-4 h-4 bg-cyber-primary rounded-full animate-pulse shadow-[0_0_10px_#06b6d4]"></div>
+                    <h1 className="text-xl font-bold tracking-wider cyber-glitch group-hover:opacity-80 transition-opacity">
+                      用户增长涨涨涨
+                    </h1>
+                 </div>
+              </div>
+              
+              {appState === AppState.EDIT && (
+                 <div className="text-xs text-cyber-dim font-mono hidden md:block">
+                    MODE: EDIT // MASK_POINTS: {strokes.length}
+                 </div>
+              )}
+            </header>
+
+            <main className="flex-1 relative overflow-hidden flex items-center justify-center">
+              {appState === AppState.UPLOAD && (
+                <div className="text-center p-10 border-2 border-dashed border-gray-700 rounded-xl hover:border-cyber-primary transition-colors bg-cyber-panel/50 backdrop-blur-sm group">
+                  <UploadIcon className="w-16 h-16 mx-auto mb-4 text-gray-500 group-hover:text-cyber-primary transition-colors" />
+                  <h2 className="text-2xl font-bold mb-2">上传图片</h2>
+                  <p className="text-gray-400 mb-6">支持 JPG, PNG. 自动识别水印</p>
+                  <label className="bg-cyber-primary hover:bg-cyan-400 text-black font-bold py-3 px-8 rounded cursor-pointer transition-transform active:scale-95 shadow-[0_0_15px_rgba(6,182,212,0.4)]">
+                    选择文件
+                    <input type="file" className="hidden" accept="image/*" onChange={handleUpload} />
+                  </label>
+                </div>
+              )}
+
+              {appState === AppState.EDIT && originalImage && (
+                <CanvasEditor 
+                  ref={canvasRef}
+                  imageSrc={originalImage}
+                  tool={tool}
+                  brushSize={brushSize}
+                  onMaskChange={setHasMask}
+                  strokes={strokes}
+                  setStrokes={setStrokes}
+                />
+              )}
+
+              {appState === AppState.PROCESSING && (
+                 <div className="absolute inset-0 bg-cyber-dark/90 z-50 flex flex-col items-center justify-center">
+                   <div className="relative w-24 h-24 mb-6">
+                      <div className="absolute inset-0 border-4 border-cyber-dim rounded-full opacity-20"></div>
+                      <div className="absolute inset-0 border-4 border-t-cyber-primary border-r-transparent border-b-cyber-secondary border-l-transparent rounded-full animate-spin"></div>
+                   </div>
+                   <p className="text-xl font-mono animate-pulse text-cyber-primary">{loadingText}</p>
+                 </div>
+              )}
+
+              {appState === AppState.COMPARE && originalImage && processedImage && (
+                 <ComparisonView originalSrc={originalImage} processedSrc={processedImage} />
+              )}
+
+              {errorMsg && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-900/90 text-white px-6 py-3 rounded border border-red-500 shadow-xl z-50">
+                   {errorMsg}
+                   <button onClick={() => setErrorMsg(null)} className="ml-4 font-bold">X</button>
+                </div>
+              )}
+            </main>
+
+            {appState !== AppState.UPLOAD && appState !== AppState.PROCESSING && (
+              <footer className="h-20 bg-cyber-panel border-t border-gray-800 flex items-center justify-center px-4 md:px-8 gap-4 md:gap-8 z-20">
+                {appState === AppState.EDIT && (
+                  <>
+                     <div className="flex items-center bg-gray-900 rounded-lg p-1 border border-gray-700">
+                        <button onClick={() => setTool(ToolType.BRUSH)} className={`p-3 rounded transition-all ${tool === ToolType.BRUSH ? 'bg-cyber-secondary text-white shadow-[0_0_10px_rgba(244,63,94,0.5)]' : 'text-gray-400 hover:text-white'}`}><BrushIcon /></button>
+                        <button onClick={() => setTool(ToolType.HAND)} className={`p-3 rounded transition-all ${tool === ToolType.HAND ? 'bg-cyber-primary text-black shadow-[0_0_10px_rgba(6,182,212,0.5)]' : 'text-gray-400 hover:text-white'}`}><HandIcon /></button>
+                     </div>
+                     <div className="flex items-center gap-3 px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 w-48 hidden sm:flex">
+                        <span className="text-xs text-gray-400 font-mono">SIZE</span>
+                        <input type="range" min="5" max="100" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-cyber-secondary [&::-webkit-slider-thumb]:rounded-full" />
+                     </div>
+                     <div className="flex items-center gap-2">
+                        <button onClick={handleUndo} className="p-3 text-gray-400 hover:text-white hover:bg-gray-800 rounded-full transition-colors"><UndoIcon /></button>
+                        <button onClick={handleReset} className="p-3 text-gray-400 hover:text-red-500 hover:bg-gray-800 rounded-full transition-colors"><TrashIcon /></button>
+                     </div>
+                     <div className="h-8 w-px bg-gray-700 mx-2"></div>
+                     <button onClick={handleStartProcessing} disabled={!hasMask} className={`flex items-center gap-2 px-6 py-3 rounded-lg font-bold text-sm md:text-base transition-all ${hasMask ? 'bg-gradient-to-r from-cyber-secondary to-purple-600 text-white hover:scale-105 shadow-[0_0_20px_rgba(244,63,94,0.4)]' : 'bg-gray-800 text-gray-500 cursor-not-allowed'}`}>
+                        <MagicIcon />
+                        <span className="hidden md:inline">开始去水印</span>
+                        <span className="md:hidden">开始</span>
+                     </button>
+                  </>
+                )}
+                {appState === AppState.COMPARE && (
+                   <>
+                     <div className="flex items-center gap-4">
+                        <button onClick={handleApplyEffect} className="flex items-center gap-2 px-5 py-2 rounded border border-cyber-primary text-cyber-primary hover:bg-cyber-primary hover:text-black transition-all font-bold"><CheckIcon /> 应用当前效果</button>
+                        <button onClick={handleDownload} className="flex items-center gap-2 px-6 py-3 rounded bg-cyber-primary text-black font-bold hover:bg-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all"><DownloadIcon /> 下载图片</button>
+                        <button onClick={handleBackToHome} className="flex items-center gap-2 px-4 py-2 text-gray-400 hover:text-white hover:bg-gray-800 border border-gray-700 rounded transition-all text-sm"><UploadIcon className="w-4 h-4"/> 上传新图</button>
+                     </div>
+                   </>
+                )}
+              </footer>
+            )}
+          </div>
+        );
+      };
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
