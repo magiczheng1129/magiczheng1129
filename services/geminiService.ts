@@ -1,4 +1,6 @@
+
 import { GoogleGenAI } from "@google/genai";
+import { StoryboardData, StoryboardShot } from "../types";
 
 const API_KEY = process.env.API_KEY || '';
 
@@ -69,15 +71,17 @@ export const removeWatermark = async (
   maskImageBase64: string
 ): Promise<string> => {
   try {
+    if (!API_KEY) {
+        throw new Error("API Key 未配置。请在URL后添加 ?key=您的API_KEY 或配置环境变量。");
+    }
+
     // 1. Optimize images (Resize & Compress) 
-    // This fixes "Speed is slow" by reducing payload size significantly
     const [optimizedOriginal, optimizedMask] = await Promise.all([
       resizeImage(originalImageBase64, false),
       resizeImage(maskImageBase64, true)
     ]);
 
     // 2. Prepare data
-    // Detect MIME type from the optimized string (likely jpeg now)
     const mimeMatch = optimizedOriginal.match(/^data:(image\/[a-zA-Z+]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
     
@@ -90,7 +94,6 @@ export const removeWatermark = async (
       contents: {
         parts: [
           {
-            // Explicit Prompt to fix "Failure"
             text: "Image Editing Task: Inpainting.\n\nInput Data:\n- Image 1: The original photograph.\n- Image 2: A binary mask (White = Area to remove/edit, Black = Keep).\n\nGoal:\nRemove the content in Image 1 that matches the White area in Image 2. Replace it with realistic background texture that blends seamlessly with the surrounding pixels.\n\nConstraint:\nReturn ONLY the processed image.",
           },
           {
@@ -131,8 +134,142 @@ export const removeWatermark = async (
     }
 
     return resultImageBase64;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini API Error:", error);
+    
+    if (error.message?.includes("API key not valid") || error.message?.includes("400")) {
+         throw new Error("API Key 无效。请检查环境变量，或在URL后尝试添加 ?key=您的有效API_KEY");
+    }
+
     throw error;
   }
 };
+
+/**
+ * Generates a structured 3x3 storyboard prompt with highly detailed descriptions.
+ */
+export const generateStoryboardData = async (
+    imageBase64: string, 
+    shotStyle: string
+): Promise<StoryboardData> => {
+    try {
+        if (!API_KEY) throw new Error("API Key Missing");
+
+        const optimizedImage = await resizeImage(imageBase64, false);
+        const mimeMatch = optimizedImage.match(/^data:(image\/[a-zA-Z+]+);base64,/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const cleanData = optimizedImage.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+
+        const prompt = `
+            Role: Expert Cinematographer and Midjourney/Stable Diffusion Prompt Engineer.
+            Task: Analyze the input image and create a **highly detailed** 9-shot storyboard plan (3x3 grid) for AI image generation.
+            Requested Style: ${shotStyle}.
+
+            INSTRUCTIONS:
+            1. **Reverse Engineering**: Analyze the input image's lighting (e.g., volumetric, natural, neon), texture (e.g., film grain, 8k, unreal engine 5), colors, and subject details.
+            2. **Main Prompt**: Write a master description that establishes the world, atmosphere, and artistic style. It must be descriptive enough to set the tone for all shots.
+            3. **Shot Details**: For each of the 9 shots, provide a **rich, visual description**. 
+               - DO NOT just say "A man standing". 
+               - DO SAY "A cinematic medium shot of a man standing in rain, rim lighting, shallow depth of field, 35mm lens, intense expression, hyper-realistic texture."
+               - Ensure variety in camera angles based on the requested style.
+            
+            Output Constraint: Return strictly valid JSON. No Markdown.
+            
+            JSON Structure:
+            {
+              "mainPromptCn": "Detailed Chinese description of environment, lighting, artistic style, and subject attributes.",
+              "mainPromptEn": "Detailed English description of environment, lighting, artistic style, and subject attributes.",
+              "shots": [
+                 { 
+                   "id": 1, 
+                   "shotTypeCn": "e.g. 特写", 
+                   "shotTypeEn": "e.g. Close-up", 
+                   "contentCn": "Rich Chinese description of Shot 1 including action, lighting, and camera details.", 
+                   "contentEn": "Rich English description of Shot 1 including action, lighting, and camera details." 
+                 },
+                 ... (total 9 items)
+              ]
+            }
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType, data: cleanData } }
+                ]
+            }
+        });
+
+        const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error("No response from AI");
+
+        const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        return JSON.parse(jsonStr);
+
+    } catch (error) {
+        console.error("Storyboard Gen Error", error);
+        throw error;
+    }
+}
+
+/**
+ * Regenerates a single shot description with high detail.
+ */
+export const regenerateSingleShot = async (
+    imageBase64: string,
+    currentShot: StoryboardShot,
+    mainPromptEn: string,
+    desiredShotTypeEn: string
+): Promise<StoryboardShot> => {
+    try {
+        if (!API_KEY) throw new Error("API Key Missing");
+
+        const optimizedImage = await resizeImage(imageBase64, false);
+        const mimeMatch = optimizedImage.match(/^data:(image\/[a-zA-Z+]+);base64,/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const cleanData = optimizedImage.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+
+        const prompt = `
+            Role: Expert Cinematographer.
+            Context: We are refining a 3x3 storyboard for AI generation.
+            Main Scene Context: ${mainPromptEn}
+            
+            Task: Rewrite the description for Shot #${currentShot.id} to match the new Shot Type: "${desiredShotTypeEn}".
+            
+            Requirements:
+            - The new description must be **visually rich and detailed**.
+            - Include specific details about the subject's pose/action relevant to the new shot type.
+            - Include lighting, camera lens (e.g., "wide angle", "telephoto"), and depth of field details.
+            - Maintain consistency with the Main Scene Context.
+            
+            Output Constraint: Return strictly valid JSON for a single shot object.
+            {
+               "id": ${currentShot.id},
+               "shotTypeCn": "...",
+               "shotTypeEn": "${desiredShotTypeEn}",
+               "contentCn": "Detailed Chinese description...",
+               "contentEn": "Detailed English description..."
+            }
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType, data: cleanData } }
+                ]
+            }
+        });
+
+        const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) throw new Error("No response");
+        const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        return JSON.parse(jsonStr);
+    } catch (error) {
+        console.error("Single Shot Gen Error", error);
+        throw error;
+    }
+}
